@@ -174,6 +174,25 @@ pub async fn database_task(
         ); //-1 to account for the __DB_VERSION__ key
     }
 
+    //Set up the Reqwless client
+    info!("Reqwless HTTP client init");
+    let mut tls_read_buffer = [0; 8096];
+    let mut tls_write_buffer = [0; 8096];
+    let mut rng = RoscRng;
+    let seed = rng.next_u64();
+
+    let client_state = TcpClientState::<2, 1024, 1024>::new();
+    let tcp_client = TcpClient::new(stack, &client_state);
+    let dns_client = DnsSocket::new(stack);
+    let tls_config = TlsConfig::new(
+        seed,
+        &mut tls_read_buffer,
+        &mut tls_write_buffer,
+        TlsVerify::None,
+    );
+    let mut http_client: HttpClient<'_, TcpClient<'_, 2>, DnsSocket<'_>> = HttpClient::new_with_tls(&tcp_client, &dns_client, tls_config);
+    debug!("Reqwless client init complete");
+
     let mut last_sync_attempt_time = Instant::MIN;
 
     loop {
@@ -185,7 +204,7 @@ pub async fn database_task(
         {
             last_sync_attempt_time = Instant::now();
 
-            match sync_database(&db, stack).await {
+            match sync_database(&db, &mut http_client).await {
                 Ok(_) => {
                     info!("Database sync successful");
                 }
@@ -249,33 +268,8 @@ async fn db_count<T: NorFlash + ReadNorFlash>(db: &Database<DbFlash<T>, NoopRawM
 }
 
 async fn sync_database<T: NorFlash + ReadNorFlash>(
-    db: &Database<DbFlash<T>, NoopRawMutex>,
-    stack: Stack<'static>,
+    db: &Database<DbFlash<T>, NoopRawMutex>, http_client: &mut HttpClient<'_, TcpClient<'_, 2>, DnsSocket<'_>> 
 ) -> Result<(), UpdateError> {
-    //Check if network is up, abort if not
-    if !stack.is_config_up() {
-        error!("Unable to sync - no wifi connection");
-        return Err(UpdateError::WifiNotConnected);
-    }
-
-    //Build a fresh http client for each database update attempt
-    info!("Reqwless HTTP client init");
-    let mut tls_read_buffer = [0; 8096];
-    let mut tls_write_buffer = [0; 8096];
-    let mut rng = RoscRng;
-    let seed = rng.next_u64();
-
-    let client_state = TcpClientState::<2, 1024, 1024>::new();
-    let tcp_client = TcpClient::new(stack, &client_state);
-    let dns_client = DnsSocket::new(stack);
-    let tls_config = TlsConfig::new(
-        seed,
-        &mut tls_read_buffer,
-        &mut tls_write_buffer,
-        TlsVerify::None,
-    );
-    let mut http_client = HttpClient::new_with_tls(&tcp_client, &dns_client, tls_config);
-
     //Check current database version
     let rtx = db.read_transaction().await;
     let mut buf = [0u8; 32];
@@ -290,7 +284,7 @@ async fn sync_database<T: NorFlash + ReadNorFlash>(
     //Must drop rtx, otherwise attempting to set up a wtx will block
     drop(rtx);
 
-    match get_remote_db_version(&mut http_client).await {
+    match get_remote_db_version(http_client).await {
         Ok(remote_db_version) => {
             info!("Remote DB version is {}", remote_db_version);
             if remote_db_version == current_db_version {
