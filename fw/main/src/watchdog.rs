@@ -8,7 +8,7 @@ use defmt::*;
 
 const WATCHDOG_TIMER_MS: u64 = 2500;
 const WATCHDOG_FEED_TIMER_MS: u64 = 200;
-const LED_BLINK_TIME_MS: u64 = 2;
+const LED_BLINK_TIME_MICROSEC: u64 = 10;
 
 #[embassy_executor::task]
 pub async fn watchdog_task(resources: WatchdogResources) -> ! {
@@ -19,9 +19,11 @@ pub async fn watchdog_task(resources: WatchdogResources) -> ! {
     info!("Watchdog enabled");
     loop {
         dog.feed();
-        Timer::after(Duration::from_millis(WATCHDOG_FEED_TIMER_MS)).await;
+        //LED flash
         heartbeat_led.set_high();
-        Timer::after(Duration::from_millis(LED_BLINK_TIME_MS)).await;
+        Timer::after(Duration::from_micros(LED_BLINK_TIME_MICROSEC)).await;
         heartbeat_led.set_low();
+        //Await next dog mealtime
+        Timer::after(Duration::from_millis(WATCHDOG_FEED_TIMER_MS)).await;
     }
 }
