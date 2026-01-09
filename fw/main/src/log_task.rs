@@ -43,10 +43,28 @@ pub enum LogError {
 
 #[embassy_executor::task]
 pub async fn log_task(stack: Stack<'static>) -> ! {
+    //Set up the Reqwless client
+    let mut tls_read_buffer = [0; 8096];
+    let mut tls_write_buffer = [0; 8096];
+    let mut rng = RoscRng;
+    let seed = rng.next_u64();
+
+    let client_state = TcpClientState::<2, 1024, 1024>::new();
+    let tcp_client = TcpClient::new(stack, &client_state);
+    let dns_client = DnsSocket::new(stack);
+    let tls_config = TlsConfig::new(
+        seed,
+        &mut tls_read_buffer,
+        &mut tls_write_buffer,
+        TlsVerify::None,
+    );
+    let mut http_client= HttpClient::new_with_tls(&tcp_client, &dns_client, tls_config);
+
+
     loop {
         //Await an event from the queue
         let event = LOG_EVENT_QUEUE.receive().await;
-        match log_event(&stack, &event).await {
+        match log_event(&mut http_client, &event).await {
             Ok(_) => {
                 info!("Log event recorded successfully")
             }
@@ -63,12 +81,7 @@ pub async fn log_task(stack: Stack<'static>) -> ! {
     }
 }
 
-async fn log_event(stack: &Stack<'_>, event: &LogEvent) -> Result<(), LogError> {
-    //Abandon if wifi not running
-    if !stack.is_config_up() {
-        return Err(LogError::WifiNotConnected);
-    }
-
+async fn log_event(http_client:  &mut HttpClient<'_, TcpClient<'_, 2>, DnsSocket<'_>>,  event: &LogEvent) -> Result<(), LogError> {
     //Convert hash to ascii string representation
     let hash = match event {
         LogEvent::Activated(hash) | LogEvent::Deactivated(hash) | LogEvent::LoginFail(hash) => {
@@ -89,22 +102,7 @@ async fn log_event(stack: &Stack<'_>, event: &LogEvent) -> Result<(), LogError> 
 
     //Build a fresh http client for each database update attempt
     debug!("Connecting to log endpoint");
-    let mut tls_read_buffer = [0; 8096];
-    let mut tls_write_buffer = [0; 8096];
-    let mut rng = RoscRng;
-    let seed = rng.next_u64();
-
-    let client_state = TcpClientState::<2, 1024, 1024>::new();
-    let tcp_client = TcpClient::new(*stack, &client_state);
-    let dns_client = DnsSocket::new(*stack);
-    let tls_config = TlsConfig::new(
-        seed,
-        &mut tls_read_buffer,
-        &mut tls_write_buffer,
-        TlsVerify::None,
-    );
-    let mut http_client = HttpClient::new_with_tls(&tcp_client, &dns_client, tls_config);
-
+    
     let mut url_buf = [0x00u8; 128];
     let url = format_no_std::show(
         &mut url_buf,
