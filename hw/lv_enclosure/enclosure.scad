@@ -1,10 +1,10 @@
 use <thatbox.scad>;
 
 pcb_dims = [60, 70, 1.6];
-pcb_z_offset = 5;
+pcb_z_offset = 8;
 pcb_mounting_hole_centres = [50, 60];
 
-box_inner = [80, 80, pcb_z_offset + pcb_dims[2] + 17];
+box_inner = [80, 80, pcb_z_offset + pcb_dims[2] + 17.5];
 box_wall_thickness = 3;
 box_corner_radius = 5;
 
