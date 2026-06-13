@@ -111,6 +111,30 @@ async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'sta
     runner.run().await
 }
 
+#[embassy_executor::task]
+pub async fn wifi_reconnect_task(mut control: cyw43::Control<'static>, stack: embassy_net::Stack<'static> ) -> ! {
+    loop {
+        info!("Connecting to wifi");
+
+        while let Err(_err) = control
+            .join(CONFIG.ssid, JoinOptions::new(CONFIG.wifi_pw.as_bytes()))
+            .await
+        {
+            Timer::after_secs(1).await;
+        }
+
+        stack.wait_link_up().await;
+        info!("Wifi Link up");
+        stack.wait_config_up().await;
+        info!("Wifi config up");
+    
+        //Wait for the conncetion to drop, and the loop will attempt to reconnect
+        stack.wait_config_down().await;
+        error!("Wifi connection dropped, reconnecting");
+        Timer::after_secs(5).await;
+    }
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
@@ -160,6 +184,9 @@ async fn main(spawner: Spawner) {
     //Spawn network task
     unwrap!(spawner.spawn(net_task(runner)));
 
+    //Spawn the wifi monitor/reconnect task
+    spawner.must_spawn(wifi_reconnect_task(control, stack));
+
     //Spawn the appropriate runner task for local (direct SPI) or remote (via RS485 link) cardreader
     if cfg!(not(feature = "remote-cardreader")) {
         info!("Local cardreader mode selected");
@@ -180,32 +207,4 @@ async fn main(spawner: Spawner) {
     //Spawn the logger task
     spawner.must_spawn(log_task(stack));
 
-    loop {
-        match control
-            .join(CONFIG.ssid, JoinOptions::new(CONFIG.wifi_pw.as_bytes()))
-            .await
-        {
-            Ok(_) => {
-                info!("WiFi network {} joined, configuring stack", CONFIG.ssid);
-                break;
-            }
-            Err(err) => {
-                error!(
-                    "Failed to join {}, status {}, retrying in 10s",
-                    CONFIG.ssid, err.status
-                );
-                Timer::after_secs(10).await;
-            }
-        }
-    }
-
-    //Complete init of Wifi stack
-    debug!("DHCP init");
-    stack.wait_config_up().await;
-    debug!("Config ready, awaiting link up");
-    stack.wait_link_up().await;
-    debug!("Link ready, awaiting config up");
-    stack.wait_config_up().await;
-    info!("Wifi ready");
-    //Main function is now complete - the peripherals/tasks/stack are operational
 }
